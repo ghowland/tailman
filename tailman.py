@@ -1,3 +1,4 @@
+#!/usr/bin/env python2
 """
 TailMan - Manage tailing multiple files, parsing and relaying raw and/or summary data to remote systems
 """
@@ -7,7 +8,172 @@ import sys
 import os
 import getopt
 import yaml
+import glob
+import re
 
+import utility
+from utility.log import log
+from utility.error import Error
+
+
+def TailLogsFromSpecs(options, spec_paths):
+  """Begin to tail files based on their specs."""
+  # Load the specs
+  specs = {}
+  
+  # Load our specs
+  for spec_path in spec_paths:
+    specs[spec_path] = yaml.load(open(spec_path))
+  
+  # Load any previously stored state
+  pass
+
+  # Gather all our file handles and create our state
+  input_files = {}
+  for (spec_path, spec_data) in specs.items():
+    #TODO(g): Handle other types of input besides glob?  If no reason, flatten it?  Input still has nice container for mark up data
+    files = glob.glob(spec_data['input']['glob'])
+    
+    for file_path in files:
+      # Open the file
+      fp = open(file_path)
+      
+      #TODO(g): Seek to previously saved position
+      position = 0
+      
+      # Store everything we know about this file, so we can work with it elsewhere
+      input_files[file_path] = {'fp':fp, 'position': position, 'spec_path':spec_path, 'spec_data':spec_data}
+  
+  # Process all our files
+  for (file_path, file_data) in input_files.items():
+    ProcessFile(file_path, file_data)
+
+
+def ProcessFile(file_path, file_data):
+  """Process this file, based on it's current position and spec."""
+  log('Processing: %s' % file_path)
+  
+  count = 0
+  
+  for line in file_data['fp']:
+    line_data = {'line':line}
+    
+    #print line
+    
+    for process_rule in file_data['spec_data']['process']:
+      ProcessTextRule(line, line_data, process_rule)
+      
+    #print 'Line Result: %s' % line_data
+    #print
+    
+    #TESTING - Limit runs
+    count += 1
+    if count > 1000:
+      break
+    
+    if count % 50 == 0:
+      print '...%s...' % count
+  
+    #sys.exit(1)
+    
+
+def ProcessTextRule(line, line_data, process_rule):
+  """Updates line_data based on the rules."""
+  # Split
+  if process_rule['type'] == 'split':
+    split_data = process_rule['split']
+    
+    #print split_data
+    #print
+    
+    parts = line_data[process_rule['key']].split(split_data['separator'], split_data.get('max split', -1))
+    
+    #print parts
+    
+    for (key, part_indexes) in split_data['values'].items():
+      key_parts = []
+      
+      for part_index in part_indexes:
+        key_parts.append(parts[part_index])
+      
+      line_data[key] = ' '.join(key_parts)
+      
+  
+  # Replace
+  elif process_rule['type'] == 'replace':
+    # Perform replacement on each term we match
+    for match in process_rule['match']:
+      # Match -> Replaced (usually deleting things out)
+      line_data[process_rule['key']] = line_data[process_rule['key']].replace(match, process_rule['replace'])
+  
+  # Match
+  elif process_rule['type'] == 'match':
+    database = yaml.load(open(process_rule['database']))
+    
+    match_found = False
+    
+    for item in database:
+      terms = re.findall('%\((.*?)\)s', item['regex'])
+      #print item['regex']
+      #print terms
+      
+      regex = item['regex']
+      
+      # Pre-processing step, to remove any conflicting characters with the rest of the regex which need to be escaped/sanitized
+      for term in terms:
+        regex = regex.replace('%%(%s)s' % term, 'MATCHMATCHMATCH')
+        
+      regex = SanitizeRegex(regex)
+      regex = regex.replace('MATCHMATCHMATCH', '(.*?)')
+      
+      regex_result = re.findall(regex, line_data[process_rule['key']])
+      if regex_result:
+        
+        # Python does something stupid with multiple variables, so pull them out of the embedded tuple it adds to the list
+        if type(regex_result[0]) == tuple:
+          regex_result = regex_result[0]
+        
+        for count in range(0, len(terms)):
+          #print '%s: %s' % (count, regex_result)
+          line_data[terms[count]] = regex_result[count]
+        
+        #print regex
+        #print 'MATCHED! %s' % regex
+        #print regex_result
+        
+        match_found = True
+        break
+    
+    if not match_found:
+      print 'MISSING: %s' % line_data[process_rule['key']]
+      pass
+      
+  
+  # Convert
+  elif process_rule['type'] == 'convert':
+    if process_rule['target'] == 'integer':
+      try:
+        line_data[process_rule['key']] = int(line_data[process_rule['key']])
+      
+      except ValueError, e:
+        #print 'WARNING: Bad formatting: %s: %s' % (process_rule['key'], line_data)
+        pass
+      
+    else:
+      raise Exception('Unknown covnert target type: %s: %s' % (line_data['spec_path'], process_rule['rule']))
+  
+  # Error - Misconfiguration
+  else:
+    raise Exception('Unknown process type: %s: %s' % (line_data['spec_path'], process_rule['rule']))
+  
+
+def SanitizeRegex(text):
+  characters = '()[].*?'
+  
+  for character in characters:
+    text = text.replace(character, '\\' + character)
+  
+  return text
 
 def Usage(error=None):
   """Print usage information, any errors, and exit.  
@@ -21,18 +187,14 @@ def Usage(error=None):
     exit_code = 0
   
   print
-  print 'usage: %s [options] <spec_file_1> [spec_file_2] [spec_file_3] ...' % os.path.basename(sys.argv[0])
-  print
+  print 'usage: %s <--server/--client> [options] <spec_file_1> [spec_file_2] [spec_file_3] ...' % os.path.basename(sys.argv[0])
   print
   print 'Options:'
   print
   print '  -h, -?, --help          This usage information'
-  print '  -C, --commit            Commit changes.  No changes will be made, unless set.'
-  print '      --hostgroups[=path] Path to host groups (directory)'
-  print '      --deploy[=path]     Path to deployment files (directory)'
-  print '      --packages[=path]   Path to package files (directory)'
-  print '      --handlers[=path]   Path to handler default yaml data (directory)'
-  print '      --buildas[=group]   Manually specify Host Group, cannot be in one already'
+  print '  -c, --client            Client: Collect logs and relay them'
+  print '  -s, --server            Server: Collect logs and relay them'
+  print '      --no-relay          Dont relay any logs to another host.  Process them here.'
   print
   print '  -v, --verbose           Verbose output'
   print
@@ -45,27 +207,18 @@ def Main(args=None):
     args = []
 
   
-  long_options = ['help', 'output=', 'format=', 'verbose', 'hostgroups=', 
-      'deploy=', 'packages=', 'bootstrap', 'commit', 'handlers=',
-      'buildas=']
+  long_options = ['help', 'client', 'server', 'no-relay']
   
   try:
-    (options, args) = getopt.getopt(args, '?hvo:f:bC', long_options)
+    (options, args) = getopt.getopt(args, '?hvcs', long_options)
   except getopt.GetoptError, e:
     Usage(e)
   
   # Dictionary of command options, with defaults
   command_options = {}
-  command_options['commit'] = False
-  command_options['bootstrap'] = False
-  command_options['hostgroup_path'] = DEFAULT_HOST_GROUP_PATH
-  command_options['deploy_path'] = DEFAULT_DEPLOY_PATH
-  command_options['deploy_temp_path'] = DEFAULT_DEPLOY_TEMP_PATH
-  command_options['package_path'] = DEFAULT_PACKAGE_PATH
-  command_options['handler_data_path'] = DEFAULT_HANDLER_DEFAULT_PATH
-  command_options['verbose'] = False
-  command_options['build_as'] = None
-  command_options['format'] = 'pprint'
+  command_options['no-relay'] = False
+  command_options['client'] = False
+  command_options['server'] = False
   
   
   # Process out CLI options
@@ -78,70 +231,38 @@ def Main(args=None):
     elif option in ('-v', '--verbose'):
       command_options['verbose'] = True
     
-    # Commit changes for Install or Package
-    #NOTE(g): If not set (False), no installation will be done, no packages
-    #   will be created.  This will be a dry-run to test what would be 
-    #   performed if commit=True
-    elif option in ('-C', '--commit'):
-      command_options['commit'] = True
+    # Client?
+    elif option in ('-c', '--client'):
+      command_options['client'] = True
     
-    # Bootstrap this host?  Install "bootstrap packages" before "packages"
-    elif option in ('-b', '--bootstrap'):
-      command_options['bootstrap'] = True
-    
-    # Host Groups Path
-    elif option in ('--hostgroups'):
-      if os.path.isdir(value):
-        command_options['hostgroup_path'] = value
-      else:
-        Error('Host Groups path specified is not a directory: %s' % value)
-    
-    # Deployment Path
-    elif option in ('--deploy'):
-      if os.path.isdir(value):
-        command_options['deploy_path'] = value
-      else:
-        Error('Deployment path specified is not a directory: %s' % value)
-    
-    # Package Path
-    elif option in ('--packages'):
-      if os.path.isdir(value):
-        command_options['package_path'] = value
-      else:
-        Error('Package path specified is not a directory: %s' % value)
-    
+    # Server?
+    elif option in ('-s', '--server'):
+      command_options['client'] = True
     
     # Invalid option
     else:
       Usage('Unknown option: %s' % option)
-  
+
+
+  if not command_options['client'] and not command_options['server']:
+    Usage('Must specify Client (-c/--client) or Server (-s/--server), or --no-relay')
   
   # Store the command options for our logging
   utility.log.RUN_OPTIONS = command_options
   
   
-  # Ensure we at least have a command, it's required
+  # Ensure we at least have one spec file
   if len(args) < 1:
-    Usage('No command sepcified')
-  
-  # Get the command
-  command = args[0]
-  
-  # If this is an unknown command, say so
-  if command not in COMMANDS:
-    Usage('Command "%s" unknown.  Commands: %s' % (command, ', '.join(COMMANDS)))
+    Usage('No spec files specified')
   
   # If there are any command args, get them
-  command_args = args[1:]
+  command_args = args
   
   # Process the command
   if 1:
   #try:
     # Process the command and retrieve a result
-    result = ProcessCommand(command, command_options, command_args)
-    
-    # Format and output the result (pprint/json/yaml to stdout/file)
-    FormatAndOuput(result, command_options)
+    TailLogsFromSpecs(command_options, command_args)
   
   #NOTE(g): Catch all exceptions, and return in properly formatted output
   #TODO(g): Implement stack trace in Exception handling so we dont lose where this
@@ -152,12 +273,9 @@ def Main(args=None):
     Error({'exception':str(e)}, command_options)
 
 
-
-  (options, args) = getopt.getopt(args, )
-
 if __name__ == '__main__':
   #NOTE(g): Fixing the path here.  If you're calling this as a module, you have to 
   #   fix the utility/handlers module import problem yourself.
   sys.path.append(os.path.dirname(sys.argv[0]))
-
-	Main(sys.argv[1:])
+  
+  Main(sys.argv[1:])
