@@ -19,6 +19,12 @@ from utility.process_client import *
 from utility.network import *
 
 
+
+def StartServers(options, spec_paths):
+  #TODO(g): Start up as many servers as is required for the number of spec files we are handling that have different ports
+  Server(9393)
+
+
 def Usage(error=None):
   """Print usage information, any errors, and exit.  
 
@@ -37,7 +43,7 @@ def Usage(error=None):
   print
   print '  -h, -?, --help          This usage information'
   print '  -c, --client            Client: Collect logs and relay them'
-  print '  -s, --server            Server: Store logs we receive, based on specs'
+  print '  -s port, --server=port  Server: Store logs we receive, based on specs'
   print '      --no-relay          Dont relay any logs to another host.  Process them here.'
   print '  -1, --once              Run once and exit.  To the end of each file from saved position.'
   print
@@ -105,20 +111,16 @@ def Main(args=None):
   if len(args) < 1:
     Usage('No spec files specified')
   
-  # If there are any command args, get them
-  command_args = args
-  
-  
+
   # Server
   if command_options['server']:
-    #TODO(g): Start up as many servers as is required for the number of spec files we are handling that have different ports
-    Server(9393)
+    StartServers(command_options, args)
     
   # Else, Client
   elif command_options['client']:
   #try:
     # Process the command and retrieve a result
-    TailLogsFromSpecs(command_options, command_args)
+    TailLogsFromSpecs(command_options, args)
   
   #NOTE(g): Catch all exceptions, and return in properly formatted output
   #TODO(g): Implement stack trace in Exception handling so we dont lose where this
