@@ -15,6 +15,7 @@ from utility.log import log
 from utility.error import Error
 from utility.path import *
 from utility.process import *
+from utility.network import *
 
 
 def TailLogsFromSpecs(options, spec_paths):
@@ -68,8 +69,9 @@ def Usage(error=None):
   print
   print '  -h, -?, --help          This usage information'
   print '  -c, --client            Client: Collect logs and relay them'
-  print '  -s, --server            Server: Collect logs and relay them'
+  print '  -s, --server            Server: Store logs we receive, based on specs'
   print '      --no-relay          Dont relay any logs to another host.  Process them here.'
+  print '  -1, --once              Run once and exit.  To the end of each file from saved position.'
   print
   print '  -v, --verbose           Verbose output'
   print
@@ -82,10 +84,10 @@ def Main(args=None):
     args = []
 
   
-  long_options = ['help', 'client', 'server', 'no-relay']
+  long_options = ['help', 'client', 'server', 'no-relay', 'once']
   
   try:
-    (options, args) = getopt.getopt(args, '?hvcs', long_options)
+    (options, args) = getopt.getopt(args, '?hvcs1', long_options)
   except getopt.GetoptError, e:
     Usage(e)
   
@@ -94,6 +96,7 @@ def Main(args=None):
   command_options['no-relay'] = False
   command_options['client'] = False
   command_options['server'] = False
+  command_options['run_once'] = False
   
   
   # Process out CLI options
@@ -106,13 +109,17 @@ def Main(args=None):
     elif option in ('-v', '--verbose'):
       command_options['verbose'] = True
     
+    # Run once?
+    elif option in ('-1', '--once'):
+      command_options['run_once'] = True
+    
     # Client?
     elif option in ('-c', '--client'):
       command_options['client'] = True
     
     # Server?
     elif option in ('-s', '--server'):
-      command_options['client'] = True
+      command_options['server'] = True
     
     # Invalid option
     else:
@@ -133,8 +140,14 @@ def Main(args=None):
   # If there are any command args, get them
   command_args = args
   
-  # Process the command
-  if 1:
+  
+  # Server
+  if command_options['server']:
+    #TODO(g): Start up as many servers as is required for the number of spec files we are handling that have different ports
+    Server(9393)
+    
+  # Else, Client
+  elif command_options['client']:
   #try:
     # Process the command and retrieve a result
     TailLogsFromSpecs(command_options, command_args)
