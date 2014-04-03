@@ -61,8 +61,12 @@ class TailTCPServerHandler(SocketServer.BaseRequestHandler):
           
           file_header = re.findall('------HOST:(.*?):PATH:(.*?):MTIME:(.*?):OFFSET:(.*?):SIZE:(.*?):------', line)
           if file_header:
+            # Extract file data
             processing = {'host':file_header[0][0], 'path':file_header[0][1], 'mtime':file_header[0][2], 'size':file_header[0][3]}
             processed_command = True
+            
+            # Match path against Spec File input glob
+            pass
           
           #TODO(g): Everything...
           if processing == None:
