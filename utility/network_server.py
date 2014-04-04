@@ -1,5 +1,5 @@
 """
-Network: Client and Server for relaying logs
+Network: Server for relaying and processing logs
 """
 
 
@@ -58,11 +58,26 @@ class TailTCPServerHandler(SocketServer.BaseRequestHandler):
           (line, buffer) = buffer.split('\n', 1)
           
           processed_command = False
+
+          # Received request to find out where we last had information about this log
+          file_header = re.findall('------QUERYHOST:(.*?):PATH:(.*?):------', line)
+          if file_header:
+            # Extract file data
+            query_request = {'host':file_header[0][0], 'path':file_header[0][1]}
+            log('Query data log: Host: %(host)s  Path: %(path)s' % query_request)
+            processed_command = True
+            
+            # Query our data source and find out when we last got logs from that system
+            pass
+            
+
           
+          # Received new file relay header.  Telling us host/path and log file state
           file_header = re.findall('------HOST:(.*?):PATH:(.*?):MTIME:(.*?):OFFSET:(.*?):SIZE:(.*?):------', line)
           if file_header:
             # Extract file data
-            processing = {'host':file_header[0][0], 'path':file_header[0][1], 'mtime':file_header[0][2], 'size':file_header[0][3]}
+            processing = {'host':file_header[0][0], 'path':file_header[0][1], 'mtime':file_header[0][2], 'offset':file_header[0][3], 'size':file_header[0][4]}
+            log('Receiving log data: Host: %(host)s  Path: %(path)s  mtime: %(mtime)s  offset: %(offset)s  size: %(size)s' % processing)
             processed_command = True
             
             # Match path against Spec File input glob
@@ -80,23 +95,58 @@ class TailTCPServerHandler(SocketServer.BaseRequestHandler):
       print "Error processing connection: ", e
 
 
-def Server(port):
+def ServerManager(specs, options):
   """Set up the server, and serve it forever."""
   global RUNNING
   
-  log('Starting server on port %s' % port)
+  ports = []
+  servers = []
+  server_fds = []
+  server_fd_specs = {}
   
-  server = TailTCPServer(('0.0.0.0', port), TailTCPServerHandler)
-
-  fd = server.fileno()
+  # Start servers for all our spec ports
+  for (spec_path, spec_data) in specs.items():
+    # If we arent listening on this port yet, start a server on it
+    if spec_data['relay port'] not in ports:
+      ports.append(spec_data['relay port'])
+      
+      log('Starting server on port %s' % spec_data['relay port'])
+      
+      # Create the server
+      server = TailTCPServer(('0.0.0.0', spec_data['relay port']), TailTCPServerHandler)
+      
+      # Get the socket file descriptor
+      fd = server.fileno()
+      server_fds.append(fd)
+      
+      # Add to our servers dict
+      server_data = {'server':server, 'port':spec_data['relay port'], 'fd':fd, 'specs':{spec_path: spec_data}}
+      server_fd_specs[fd] = server_data
+      servers.append(server_data)
+    
+    # Else, add this spec to an existing server
+    else:
+      # Look through all the existing servers
+      for count in range(0, len(servers)):
+        # If this is a port match, add it to the server
+        if servers[count]['port'] == spec_data['relay port']:
+          servers[count]['specs'][spec_path] = spec_data
+          break
+      
   
+  
+  # Handle requests
   while RUNNING:
     try:
-      (wait_in, wait_out, wait_err) = select.select([fd], [fd], [], 0)
-      
-      # Handle incoming TCP request
-      if fd in wait_in:
-        server.handle_request()
+      (wait_in, wait_out, wait_err) = select.select(server_fds, server_fds, [], 0)
+
+      # Look through each server socket file descriptor
+      for fd in server_fds:
+        # Handle incoming TCP request
+        if fd in wait_in:
+          for count in range(0, len(servers)):
+            if servers[count]['fd'] == fd:
+              servers[count]['server'].handle_request()
       
       # Give back to the system as we spin loop
       time.sleep(0.001)
@@ -107,29 +157,6 @@ def Server(port):
       log('Tail Server Error: %s' % e)
 
 
-def ClientSend(path_host, path, path_mtime, path_offset, path_size, text, target_host, target_port, retry=0):
-  global CONNECTION
-  
-  if retry >= 3:
-    raise NetworkRetryFailure('Failed to connect and send data %s times: %s (%s)' % (retry, target_host, target_port))
-  
-  if CONNECTION == None:
-    CONNECTION = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    CONNECTION.connect((target_host, target_port))
-  
-  try:
-    CONNECTION.send('\n------HOST:%s:PATH:%s:MTIME:%s:OFFSET:%s:SIZE:%s:------\n' % (path_host, path, path_mtime, path_offset,
-                                                                                     path_size))
-    CONNECTION.send(text)
-  
-  except Exception, e:
-    log('Network failure: %s: %s: %s' % (target_host, target_port, e))
-
-
-def GetHostname():
-  """Returns a string, the fully qualified domain name (FQDN) of this local host."""
-  (status, output) = commands.getstatusoutput('/bin/hostname')
-  return output.split('.')[0]
-
-
 #------HOST:somehost:PATH:/tmp/blah.log:MTIME:1234567:OFFSET:0:SIZE:1024:------
+#------QUERYHOST:somehost:PATH:/tmp/blah.log:------
+

@@ -16,13 +16,22 @@ from utility.error import Error
 from utility.path import *
 from utility.process_server import *
 from utility.process_client import *
-from utility.network import *
+from utility.network_client import *
+from utility.network_server import *
 
 
 
 def StartServers(options, spec_paths):
+  specs = {}
+  
+  # Load all the specs
+  for spec_path in spec_paths:
+    spec_data = LoadYaml(spec_path)
+    
+    specs[spec_path] = spec_data
+  
   #TODO(g): Start up as many servers as is required for the number of spec files we are handling that have different ports
-  Server(9393)
+  ServerManager(specs, options)
 
 
 def Usage(error=None):
@@ -115,7 +124,7 @@ def Main(args=None):
   # Server
   if command_options['server']:
     StartServers(command_options, args)
-    
+  
   # Else, Client
   elif command_options['client']:
   #try:
