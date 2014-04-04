@@ -68,6 +68,7 @@ class TailTCPServerHandler(SocketServer.BaseRequestHandler):
             processed_command = True
             
             # Query our data source and find out when we last got logs from that system
+            log('Server: %s' % self.server.server_data)
             pass
             
 
@@ -123,6 +124,9 @@ def ServerManager(specs, options):
       server_data = {'server':server, 'port':spec_data['relay port'], 'fd':fd, 'specs':{spec_path: spec_data}}
       server_fd_specs[fd] = server_data
       servers.append(server_data)
+      
+      # Add our server_data to the server, so it is accessable (all specs) when handling requests
+      server.server_data = server_data
     
     # Else, add this spec to an existing server
     else:
