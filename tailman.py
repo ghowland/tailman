@@ -7,8 +7,6 @@ TailMan - Manage tailing multiple files, parsing and relaying raw and/or summary
 import sys
 import os
 import getopt
-import glob
-import re
 
 import utility
 from utility.log import log
@@ -18,7 +16,6 @@ from utility.process_server import *
 from utility.process_client import *
 from utility.network_client import *
 from utility.network_server import *
-
 
 
 def StartServers(options, spec_paths):

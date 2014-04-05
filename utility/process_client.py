@@ -3,12 +3,16 @@ Processing
 """
 
 
+import glob
 import re
+import stat
+import os
 
 from log import log
 from path import *
 
 from process_server import *
+from network_client import *
 
 
 def TailLogsFromSpecs(options, spec_paths):
@@ -41,59 +45,22 @@ def TailLogsFromSpecs(options, spec_paths):
   
   # Process all our files
   for (file_path, file_data) in input_files.items():
-    ProcessFile(file_path, file_data)
+    RelayFile(file_path, file_data)
 
 
-def ProcessFile(file_path, file_data):
-  """Process this file, based on it's current position and spec."""
-  log('Processing: %s' % file_path)
+def RelayFile(file_path, file_data):
+  """Relay this file to the server"""
+  path_mtime = os.stat(file_path)[stat.ST_MTIME]
+  path_size = os.stat(file_path)[stat.ST_SIZE]
   
-  count = 0
+  #TODO(g): Use the queried data for this, not just starting at the beginning
+  path_offset = 0
   
-  previous_line_data = None
+  text = file_data['fp'].read()
   
-  for line in file_data['fp']:
-    line_data = {'line':line}
-    
-    #print line
-    
-    # Test if this line is multi-line
-    is_multi_line = False
-    for multi_line_test_regex in file_data['spec_data']['multi line regex test']:
-      if re.match(multi_line_test_regex, line):
-        is_multi_line = True
-        #print 'Multiline: %s' % line
-        # If we have a real previous line to embed this data in
-        if previous_line_data != None:
-          if 'multiline' not in previous_line_data:
-            previous_line_data['multiline'] = []
-          
-          previous_line_data['multiline'].append(line)
-        break
+  target_host = file_data['spec_data']['relay host']
+  target_port = file_data['spec_data']['relay port']
+  
+  # Send this text to the server
+  ClientSend(file_path, path_mtime, path_offset, path_size, text, target_host, target_port)
 
-    # Only process rules on first lines (not multi lines)    
-    if not is_multi_line:
-      for process_rule in file_data['spec_data']['process']:
-        ProcessTextRule(line, line_data, process_rule)
-      
-      #DEBUG
-      if previous_line_data != None and 'multiline' in previous_line_data:
-        #print 'Multi: %s' % previous_line_data
-        pass
-      
-      # Move forward in our multi-line handling variable
-      previous_line_data = line_data
-    
-    #print 'Result: %s' % line_data
-    #print
-    
-    #TESTING - Limit runs
-    count += 1
-    #if count > 10000:
-    #  break
-    
-    if count % 50 == 0:
-      print '...%s...' % count
-  
-    #sys.exit(1)
-    

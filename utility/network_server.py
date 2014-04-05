@@ -4,11 +4,12 @@ Network: Server for relaying and processing logs
 
 
 import SocketServer
-import commands
 import select
 import time
 import re
+import os
 
+from process_server import *
 from log import log
 
 
@@ -70,16 +71,56 @@ class TailTCPServerHandler(SocketServer.BaseRequestHandler):
             # Query our data source and find out when we last got logs from that system
             log('Server: %s' % self.server.server_data)
             pass
-            
-
+          
+          file_header = re.findall('------FINISHED:HOST:(.*?):PATH:(.*?):------', line)
+          if file_header:
+            finish_request = {'host':file_header[0][0], 'path':file_header[0][1]}
+            processed_command = True
+            log('Finished processing: %(host)s: %(path)s' % finish_request)
+            log('   Processing Data: %s' % processing)
+            # Remove the last newline, we always add one too many
+            processing['storage_path_fp'].seek(-1, os.SEEK_END)
+            processing['storage_path_fp'].truncate()
+            # Close the storage page
+            processing['storage_path_fp'].close()
           
           # Received new file relay header.  Telling us host/path and log file state
           file_header = re.findall('------HOST:(.*?):PATH:(.*?):MTIME:(.*?):OFFSET:(.*?):SIZE:(.*?):------', line)
           if file_header:
+            # If we were processing a different file, save it's updated offset and any other data
+            if processing:
+              #TODO(g): Save offset_processed...
+              pass
+            
             # Extract file data
-            processing = {'host':file_header[0][0], 'path':file_header[0][1], 'mtime':file_header[0][2], 'offset':file_header[0][3], 'size':file_header[0][4]}
-            log('Receiving log data: Host: %(host)s  Path: %(path)s  mtime: %(mtime)s  offset: %(offset)s  size: %(size)s' % processing)
+            processing = {'host':file_header[0][0], 'path':file_header[0][1], 'mtime':file_header[0][2], 'offset':file_header[0][3],
+                          'size':file_header[0][4], 'offset_processed':0, 'data':{}}
             processed_command = True
+            
+            # Add in the spec file information to this processing data
+            for (spec_path, spec_data) in self.server.server_data['specs'].items():
+              path_regex = spec_data['input']['glob'].replace('*', '(.*?)')
+              path_regex_result = re.findall(path_regex, processing['path'])
+              if path_regex_result:
+                processing['spec_path'] = spec_path
+                processing['spec_data'] = spec_data
+                
+                # Get all the glob key data out of our path
+                for count in range(0, len(spec_data['input']['glob keys'])):
+                  glob_key = spec_data['input']['glob keys'][count]
+                  # If we arent getting tuple wrapped regex data (list with a tuple in it, with our actual data), extract directly
+                  if type(path_regex_result[0]) != tuple:
+                    processing['data'][glob_key] = path_regex_result[count]
+                  # Else, extract the glob key from inside the tuple in the list
+                  else:
+                    processing['data'][glob_key] = path_regex_result[0][count]
+                    
+                
+                # We found our spec, no need to look for more
+                break
+            
+            log('Receiving log data: Host: %(host)s  Path: %(path)s  mtime: %(mtime)s  offset: %(offset)s  size: %(size)s  data: %(data)s' % \
+                processing)
             
             # Match path against Spec File input glob
             pass
@@ -87,10 +128,33 @@ class TailTCPServerHandler(SocketServer.BaseRequestHandler):
           #TODO(g): Everything...
           if processing == None:
             print 'NULL: %s' % line
+          
           else:
             # If this is a normal line, and not a command
             if not processed_command:
               print '%s: %s: %s' % (processing['host'], processing['path'], line)
+              
+              # Store this line
+              path_id = 0
+              storage_path = '%s/%s' % (processing['spec_data']['storage directory'] % processing, path_id)
+              
+              # Open the path for storing data, seek to the offset
+              if 'storage_path' not in processing:
+                processing['path_id'] = path_id
+                processing['storage_path'] = storage_path
+                
+                # Ensure the directory exists
+                if not os.path.isdir(os.path.dirname(storage_path)):
+                  os.makedirs(os.path.dirname(storage_path))
+                
+                processing['storage_path_fp'] = open(storage_path, 'w+')
+                processing['storage_path_fp'].seek(int(processing['offset']), 0)
+              
+              # Write the line
+              processing['storage_path_fp'].write(line + '\n')
+              
+              # Update our state
+              processing['offset_processed'] += len(line)
     
     except Exception, e:
       print "Error processing connection: ", e
@@ -136,7 +200,6 @@ def ServerManager(specs, options):
         if servers[count]['port'] == spec_data['relay port']:
           servers[count]['specs'][spec_path] = spec_data
           break
-      
   
   
   # Handle requests
