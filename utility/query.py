@@ -10,7 +10,7 @@ import query_mysql
 
 def Query(sql, config):
   """Query the datasources specified in the config"""
-  if config['type'] == 'mysql':
+  if config['datasource']['type'] == 'mysql':
     result = query_mysql.Query(sql, config['datasource'])
     return result
 

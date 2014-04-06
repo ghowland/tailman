@@ -14,6 +14,10 @@ CURSORS = {}
 MAX_RETRIES = 3
 
 
+def MaxRetryFailure(Exception):
+  """Failed to do the query requested."""
+
+
 class MySQLCursorDict(mysql.connector.cursor.MySQLCursor):
     def _row_to_python(self, rowdata, desc=None):
         row = super(MySQLCursorDict, self)._row_to_python(rowdata, desc)
@@ -30,7 +34,7 @@ def GetConectionAndCursor(datasource):
   
   if key not in CONNECTIONS or CONNECTIONS[key] == None:
     CONNECTIONS[key] = mysql.connector.connect(user=datasource['user'], password=datasource['password'], host=datasource['host'], database=datasource['database'])
-    CURSORS[key] = conn.cursor(cursor_class=MySQLCursorDict)
+    CURSORS[key] = CONNECTIONS[key].cursor(cursor_class=MySQLCursorDict)
   
   return (CONNECTIONS[key], CURSORS[key])
 
@@ -43,8 +47,8 @@ def CloseConnection(datasource):
 
   # Close cursor and connection, if they exist
   if key in CONNECTIONS and CONNECTIONS[key] != None:
-    cursor.close()
-    conn.close()
+    CURSORS[key].close()
+    CONNECTIONS[key].close()
   
   # Set keys to None.  We created them, and closed them.
   CONNECTIONS[key] = None
@@ -53,6 +57,8 @@ def CloseConnection(datasource):
 
 def Query(sql, datasource):
   attempt = 0
+  
+  failures = []
   
   while attempt < MAX_RETRIES:
     # Keep track of how many times we attempt to perform this query
@@ -77,10 +83,15 @@ def Query(sql, datasource):
       break
     
     except mysql.connector.errors.Error, e:
-      log('MySQL error: %s: %s' % (e, sql))
+      msg = 'MySQL error: %s: %s' % (e, sql)
+      failures.append(msg)
+      log(msg)
       
       #TODO(g): Only do this with connection related issues.  Need to work those out, because the docs suck.
       CloseConnection(datasource)
+  
+  if attempt >= MAX_RETRIES:
+    raise Exception('Failed: %s -- Messages: %s ---- %s' % (attempt, sql, failures))
   
   return result
 

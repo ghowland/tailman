@@ -32,7 +32,8 @@ class TailTCPServerHandler(SocketServer.BaseRequestHandler):
   def handle(self):
     global RUNNING
     
-    try:
+    #try:
+    if 1:
       # Get our file descriptor
       fd = self.request.fileno()
       
@@ -72,6 +73,7 @@ class TailTCPServerHandler(SocketServer.BaseRequestHandler):
             log('Server: %s' % self.server.server_data)
             pass
           
+          # Received close-log relay header.  We're done with relaying/parsing this host/path at the moment.
           file_header = re.findall('------FINISHED:HOST:(.*?):PATH:(.*?):------', line)
           if file_header:
             finish_request = {'host':file_header[0][0], 'path':file_header[0][1]}
@@ -96,6 +98,7 @@ class TailTCPServerHandler(SocketServer.BaseRequestHandler):
             processing = {'host':file_header[0][0], 'path':file_header[0][1], 'mtime':file_header[0][2], 'offset':file_header[0][3],
                           'size':file_header[0][4], 'offset_processed':0, 'data':{}}
             processed_command = True
+            previous_line_data = None
             
             # Add in the spec file information to this processing data
             for (spec_path, spec_data) in self.server.server_data['specs'].items():
@@ -119,6 +122,13 @@ class TailTCPServerHandler(SocketServer.BaseRequestHandler):
                 # We found our spec, no need to look for more
                 break
             
+            # Store component ID in the data, we get that from our spec_data, so every line gets it
+            processing['data']['component'] =  GetComponentId(processing)
+            
+            # Get the latest log file, for this host/path and occurred time
+            latest_log_file = GetLatestLogFileInfo(processing)
+            processing['latest_log_file'] = latest_log_file
+            
             log('Receiving log data: Host: %(host)s  Path: %(path)s  mtime: %(mtime)s  offset: %(offset)s  size: %(size)s  data: %(data)s' % \
                 processing)
             
@@ -132,15 +142,13 @@ class TailTCPServerHandler(SocketServer.BaseRequestHandler):
           else:
             # If this is a normal line, and not a command
             if not processed_command:
-              print '%s: %s: %s' % (processing['host'], processing['path'], line)
+              #print '%s: %s: %s' % (processing['host'], processing['path'], line)
               
               # Store this line
-              path_id = 0
-              storage_path = '%s/%s' % (processing['spec_data']['storage directory'] % processing, path_id)
+              storage_path = '%s/%s' % (processing['spec_data']['storage directory'] % processing, processing['latest_log_file']['id'])
               
               # Open the path for storing data, seek to the offset
               if 'storage_path' not in processing:
-                processing['path_id'] = path_id
                 processing['storage_path'] = storage_path
                 
                 # Ensure the directory exists
@@ -150,14 +158,29 @@ class TailTCPServerHandler(SocketServer.BaseRequestHandler):
                 processing['storage_path_fp'] = open(storage_path, 'w+')
                 processing['storage_path_fp'].seek(int(processing['offset']), 0)
               
+              # Process this line
+              saved_previous_line_data = previous_line_data
+              previous_line_data = ProcessLine(line, processing, previous_line_data)
+              
+              # If we went from a previous multiline, to a non-multiline, we now how to store the multiline
+              if saved_previous_line_data and 'multiline' in saved_previous_line_data and 'multiline' not in previous_line_data:
+                SaveMultiLine(saved_previous_line_data, processing)
+                
+              # Else, if this is a normal line, save all the key value pairs
+              elif 'multiline' not in previous_line_data:
+                try:
+                  SaveLineKeys(previous_line_data, processing)
+                except Exception, e:
+                  log('Failed to save line keys, line: %s --- error: %s' % (line, e))
+              
               # Write the line
               processing['storage_path_fp'].write(line + '\n')
               
               # Update our state
               processing['offset_processed'] += len(line)
     
-    except Exception, e:
-      print "Error processing connection: ", e
+    #except Exception, e:
+    #  print "Error processing connection: ", e
 
 
 def ServerManager(specs, options):
