@@ -8,13 +8,15 @@ Notes:
 
 import re
 import time
+import json
+from decimal import Decimal
 
 from log import log
 from path import *
 from query import *
 
 
-def ProcessTextRule(line, line_data, process_rule):
+def ProcessTextRule(line_data, process_rule):
   """Updates line_data based on the rules."""
   # Split
   if process_rule['type'] == 'split':
@@ -34,7 +36,7 @@ def ProcessTextRule(line, line_data, process_rule):
         for part_index in part_indexes:
           key_parts.append(parts[part_index])
       except IndexError, e:
-        print 'WARNING: Part not found: %s: %s: %s' % (part_index, parts, line_data[process_rule['key']])
+        log('WARNING: Part not found: %s: %s: %s' % (part_index, parts, line_data[process_rule['key']]))
       
       line_data[key] = ' '.join(key_parts)
       
@@ -44,7 +46,10 @@ def ProcessTextRule(line, line_data, process_rule):
     # Perform replacement on each term we match
     for match in process_rule['match']:
       # Match -> Replaced (usually deleting things out)
+      #print 'Replacing: "%s" with "%s"' % (match, process_rule['replace'])
+      #print line_data[process_rule['key']]
       line_data[process_rule['key']] = line_data[process_rule['key']].replace(match, process_rule['replace'])
+      #print line_data[process_rule['key']]
   
   # Delete
   elif process_rule['type'] == 'delete':
@@ -87,6 +92,10 @@ def ProcessTextRule(line, line_data, process_rule):
         #print regex_result
         
         match_found = True
+        
+        # Save the line match ID, so we can reference it for markup/state information
+        line_data[process_rule['match key']] = item['id']
+        
         break
     
     if not match_found:
@@ -123,29 +132,36 @@ def SanitizeRegex(text):
 
 def ProcessLine(line, processing, previous_line_data):
   """Process this life, based on it's current position and spec."""
-  line_data = {'line':line}
+  line_data = {'line':line, 'line_offset':processing['offset_processed']}
+  
   # Update with always-included data, like glob keys, and the component
   line_data.update(processing['data'])
   
-  # Test if this line is multi-line
+  # Test if this line is multi-line (positive test)
   is_multi_line = False
-  for multi_line_test_regex in processing['spec_data']['multi line regex test']:
+  for multi_line_test_regex in processing['spec_data'].get('multi line regex test', []):
     if re.match(multi_line_test_regex, line):
-      #print 'Multiline: %s' % line
       is_multi_line = True
-      
-      # If we have a real previous line to embed this data in
-      if previous_line_data != None:
-        if 'multiline' not in previous_line_data:
-          previous_line_data['multiline'] = []
-        
-        previous_line_data['multiline'].append(line)
       break
+  # Negative regex test
+  for multi_line_test_regex in processing['spec_data'].get('multi line regex not', []):
+    if not re.match(multi_line_test_regex, line):
+      is_multi_line = True
+      break
+  
+  # If this is multi_line and we have a real previous line to embed this data in
+  if is_multi_line and previous_line_data != None:
+    #print 'Multiline: %s' % line
+    if 'multiline' not in previous_line_data:
+      previous_line_data['multiline'] = []
+    
+    previous_line_data['multiline'].append(line)
+
 
   # Only process rules on first lines (not multi lines), and return the line_data to be the next line's previous_line_data
   if not is_multi_line:
     for process_rule in processing['spec_data']['process']:
-      ProcessTextRule(line, line_data, process_rule)
+      ProcessTextRule(line_data, process_rule)
     
     return line_data
   
@@ -195,6 +211,9 @@ def SaveMultiLine(multi_line_data, processing):
   
   TODO(g): The SQL needs to be generalized, right now it is for a specific schema that is non-universal.
   """
+  # Prepend the first line to the multiline list
+  multi_line_data['multiline'] = [multi_line_data['line']] + multi_line_data['multiline']
+  
   # Get the component ID
   component_id = GetComponentId(processing)
   
@@ -202,10 +221,15 @@ def SaveMultiLine(multi_line_data, processing):
     service_id_value = 'NULL'
   else:
     service_id_value = multi_line_data['service_id']
-  
-  sql = "INSERT INTO log_exception (component, occurred, subcomponent, service_id, stack_trace, log_id, log_offset) VALUES (%s, '%s', '%s', %s, '%s', %s, %s)" % (\
-        component_id, multi_line_data['occurred'], SanitizeSQL(multi_line_data['subcomponent']), service_id_value,
-        SanitizeSQL(multi_line_data['multiline']), processing['latest_log_file']['id'], processing['offset_processed'])
+
+
+  # Convert occurred to decimal, so milliseconds are retained and we can sort and do range operations
+  #NOTE(g): MySQL will chop milliseconds from datetimes, which is why this is required
+  occurred = ConvertDateToDecimal(multi_line_data['occurred'])
+
+  sql = "INSERT INTO log_multiline (component, occurred, subcomponent, service_id, `lines`, log_id, log_offset) VALUES (%s, %s, '%s', %s, '%s', %s, %s)" % (\
+        component_id, occurred, SanitizeSQL(multi_line_data['subcomponent']), service_id_value,
+        SanitizeSQL(multi_line_data['multiline']), processing['latest_log_file']['id'], multi_line_data['line_offset'])
   exception_id = Query(sql, LoadYaml(processing['spec_data']['datasource config']))
   
   return exception_id
@@ -229,10 +253,62 @@ def GetComponentId(processing):
   return component_id
 
 
-def SaveLineKeys(line_data, processing):
+def SaveLine(line_data, processing):
   """Save this line's key value pair data into the DB, along with log file ID and offset to be able to look at the log data directly."""
-  for (key, value) in line_data.items():
-    sql = "INSERT INTO log_key (`key`, occurred, value, log_id, log_offset) VALUES ('%s', '%s', '%s', %s, %s)" % \
-          (SanitizeSQL(key), line_data['occurred'], SanitizeSQL(value), processing['latest_log_file']['id'], processing['offset_processed'])
-    log_key_id = Query(sql, LoadYaml(processing['spec_data']['datasource config']))
+  #for (key, value) in line_data.items():
+  #  sql = "INSERT INTO log_key (`key`, occurred, value, log_id, log_offset) VALUES ('%s', '%s', '%s', %s, %s)" % \
+  #        (SanitizeSQL(key), line_data['occurred'], SanitizeSQL(value), processing['latest_log_file']['id'], processing['offset_processed'])
+  #  log_key_id = Query(sql, LoadYaml(processing['spec_data']['datasource config']))
+  
+  # Massage line data
+  data = dict(line_data)
+  
+  #print line_data
+
+  # Extract the message match ID, or use -1 for Unknown
+  if 'message_match_id' in line_data:
+    match_id = line_data['message_match_id']
+    del line_data['message_match_id']
+  else:
+    match_id = -1
+ 
+  occurred = line_data['occurred']
+  del data['occurred']
+  component = line_data['component']
+  del data['component']
+  subcomponent = line_data['subcomponent']
+  del data['subcomponent']
+  line_offset = line_data['line_offset']
+  del data['line_offset']
+
+  # Remove the full line, if we know we have a match (and have extracted data)
+  if match_id != -1:
+    del data['line']
+  
+
+  # Encode data in JSON for field storage
+  data_json = json.dumps(data, sort_keys=True)
+  
+  # Convert occurred to decimal, so milliseconds are retained and we can sort and do range operations
+  #NOTE(g): MySQL will chop milliseconds from datetimes, which is why this is required
+  occurred = ConvertDateToDecimal(occurred)
+  
+  sql = "INSERT INTO log_line (occurred, match_id, log_id, log_offset, component, subcomponent, data_json) VALUES (%s, %s, %s, %s, %s, '%s', '%s')" % \
+        (occurred, match_id, processing['latest_log_file']['id'], line_offset,
+         component, SanitizeSQL(subcomponent), SanitizeSQL(data_json))
+  new_log_id = Query(sql, LoadYaml(processing['spec_data']['datasource config']))
+
+
+def ConvertDateToDecimal(datetime):
+  """Acceptions datetime string, returns Decimal version with milliseconds retained"""
+  time_pieces = re.findall('(\\d\\d\\d\\d)-(\\d\\d)-(\\d\\d) (\\d\\d):(\\d\\d):(\\d\\d.\\d+)', datetime)
+  
+  occurred = Decimal(time_pieces[0][0])  * Decimal(10000000000)      # Year
+  occurred += Decimal(time_pieces[0][1]) * Decimal(100000000)        # Month
+  occurred += Decimal(time_pieces[0][2]) * Decimal(1000000)          # Day
+  occurred += Decimal(time_pieces[0][3]) * Decimal(10000)            # Hour
+  occurred += Decimal(time_pieces[0][4]) * Decimal(100)              # Minute
+  occurred += Decimal(time_pieces[0][5]) * Decimal(1)                # Seconds
+  
+  return occurred
 

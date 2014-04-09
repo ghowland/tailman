@@ -137,6 +137,7 @@ class TailTCPServerHandler(SocketServer.BaseRequestHandler):
           
           #TODO(g): Everything...
           if processing == None:
+            # We do not know where this line came from, and so are doing nothing with it.  This should not appear.
             print 'NULL: %s' % line
           
           else:
@@ -155,29 +156,32 @@ class TailTCPServerHandler(SocketServer.BaseRequestHandler):
                 if not os.path.isdir(os.path.dirname(storage_path)):
                   os.makedirs(os.path.dirname(storage_path))
                 
-                processing['storage_path_fp'] = open(storage_path, 'w+')
+                processing['storage_path_fp'] = open(storage_path, 'r+')
                 processing['storage_path_fp'].seek(int(processing['offset']), 0)
+              
               
               # Process this line
               saved_previous_line_data = previous_line_data
               previous_line_data = ProcessLine(line, processing, previous_line_data)
               
+              
               # If we went from a previous multiline, to a non-multiline, we now how to store the multiline
               if saved_previous_line_data and 'multiline' in saved_previous_line_data and 'multiline' not in previous_line_data:
                 SaveMultiLine(saved_previous_line_data, processing)
-                
+              
               # Else, if this is a normal line, save all the key value pairs
-              elif 'multiline' not in previous_line_data:
-                try:
-                  SaveLineKeys(previous_line_data, processing)
-                except Exception, e:
-                  log('Failed to save line keys, line: %s --- error: %s' % (line, e))
+              elif saved_previous_line_data and 'multiline' not in saved_previous_line_data:
+                #try:
+                if 1:
+                  SaveLine(saved_previous_line_data, processing)
+                #except Exception, e:
+                #  log('Failed to save line keys, line: %s --- error: %s' % (line, e))
               
               # Write the line
               processing['storage_path_fp'].write(line + '\n')
               
               # Update our state
-              processing['offset_processed'] += len(line)
+              processing['offset_processed'] += len(line) + 1
     
     #except Exception, e:
     #  print "Error processing connection: ", e
