@@ -48,7 +48,7 @@ def CloseAllConnections():
   global CLIENT_CONNECTIONS
   
   for key in CLIENT_CONNECTIONS:
-    log('Closing connection: %s: %s' % (key, CLIENT_CONNECTIONS[key]))
+    log('Closing connection: %s: (fd=%s)' % (key, CLIENT_CONNECTIONS[key].fileno()))
     CLIENT_CONNECTIONS[key].close()
 
 
@@ -96,13 +96,16 @@ def ClientGetOffset(path, path_mtime, path_size, target_host, target_port, retry
   hostname = GetHostname()
   
   # Send the data
-  try:
+  #try:
+  if 1:
     #TODO(g): Perform checksum of first 1024 bytes of the file, so we know its the same file
     conn.send('\n------QUERYHOST:%s:PATH:%s:SIZE:%s:CHECKSUM:0:------\n' % (hostname, path, path_size))
     
     # Get the response
     fp = conn.makefile()
     response = fp.readline()
+    
+    #print response
     
     # Extract the data with a regex
     regex = '------FILERESPONSE:PATH:(.*?):SIZE:(.*?):OFFSET:(.*?):------'
@@ -123,14 +126,14 @@ def ClientGetOffset(path, path_mtime, path_size, target_host, target_port, retry
     #   lines in this method
     pass
 
-  # Handle errors
-  except Exception, e:
-    #log('Network failure: %s: %s: %s' % (target_host, target_port, e))
-    #
-    ## Reset the connection
-    #ResetConnection(target_host, target_port)
-    
-    raise Exception('Failed to connect and send data %s times: %s (%s): %s' % (retry, target_host, target_port, e))
+  ## Handle errors
+  #except Exception, e:
+  #  #log('Network failure: %s: %s: %s' % (target_host, target_port, e))
+  #  #
+  #  ## Reset the connection
+  #  #ResetConnection(target_host, target_port)
+  #  
+  #  raise Exception('Failed to connect and send data %s times: %s (%s): %s' % (retry, target_host, target_port, e))
   
   return data
   

@@ -183,9 +183,15 @@ def GetLatestLogFileInfo(processing):
   #print sql
   latest_log_file = Query(sql, LoadYaml(processing['spec_data']['datasource config']))
 
+  # Get the log size, if it exists.
+  if latest_log_file and os.path.isfile(latest_log_file[0]['path']):
+    log_size = os.stat(latest_log_file[0]['path'])[stat.ST_SIZE]
+  else:
+    log_size = 0
+
   # If we did not receive a log file, create it
   #TODO(g): Add test for the occurred time or checksum of the first 1024 bytes of the file.  Then we known its working.
-  if not latest_log_file or os.stat(latest_log_file[0]['path'])[stat.ST_SIZE] > processing['size']:
+  if not latest_log_file or log_size > processing['size']:
     latest_log_file = CreateNewLogFile(processing)
   
   # Else, we got it, so extract from the single list
@@ -223,6 +229,10 @@ def CreateNewLogFile(processing):
   # Get the log file data, we just created (includes defaults)
   sql = "SELECT * FROM log_file WHERE id = %s" % new_id
   latest_log_file = Query(sql, LoadYaml(processing['spec_data']['datasource config']))[0]
+  
+  # If the directory doesnt exist, create it
+  if not os.path.isdir(os.path.dirname(latest_log_file['path'])):
+    os.makedirs(os.path.dirname(latest_log_file['path']))
   
   return latest_log_file
 
