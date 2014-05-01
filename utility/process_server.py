@@ -10,6 +10,8 @@ import re
 import time
 import json
 from decimal import Decimal
+import stat
+import os
 
 from log import log
 from path import *
@@ -178,10 +180,12 @@ def GetLatestLogFileInfo(processing):
   # Get the latest log file from the DB
   sql = "SELECT * FROM log_file WHERE host = '%s' AND host_path = '%s' ORDER BY updated DESC LIMIT 1" % \
         (SanitizeSQL(processing['host']), SanitizeSQL(processing['path']))
+  print sql
   latest_log_file = Query(sql, LoadYaml(processing['spec_data']['datasource config']))
-  
+
   # If we did not receive a log file, create it
-  if not latest_log_file:
+  #TODO(g): Add test for the occurred time or checksum of the first 1024 bytes of the file.  Then we known its working.
+  if not latest_log_file or os.stat(latest_log_file[0]['path'])[stat.ST_SIZE] > processing['size']:
     latest_log_file = CreateNewLogFile(processing)
   
   # Else, we got it, so extract from the single list
@@ -191,15 +195,32 @@ def GetLatestLogFileInfo(processing):
   return latest_log_file
 
 
+def UpdateLogFileInfo(processing):
+  """Update the log file we are working on, we want to know the offset."""
+  # Get current file position
+  offset = processing['storage_path_fp'].seek(0, 1)
+  
+  # Update the log file entry
+  sql = "UPDATE log_file SET updated = NOW(), remote_offset = %s, size = %s WHERE id = %s" % \
+        (processing['offset_processed'], processing['size'], processing['latest_log_file']['id'])
+  Query(sql, LoadYaml(processing['spec_data']['datasource config']))
+
+
 def CreateNewLogFile(processing):
   """Create a new log file."""
   # Get the component ID
   component_id = GetComponentId(processing)
   
-  sql = "INSERT INTO log_file (host, host_path, updated, component) VALUES ('%s', '%s', NOW(), %s)" % \
+  sql = "INSERT INTO log_file (host, host_path, created, component) VALUES ('%s', '%s', NOW(), %s)" % \
         (SanitizeSQL(processing['host']), SanitizeSQL(processing['path']), component_id)
   new_id = Query(sql, LoadYaml(processing['spec_data']['datasource config']))
   
+  # Update our path, which needs our ID
+  storage_path = '%s/%s' % (processing['spec_data']['storage directory'] % processing, new_id)
+  sql = "UPDATE log_file SET path = '%s' WHERE id = %s" % (SanitizeSQL(storage_path), new_id)
+  Query(sql, LoadYaml(processing['spec_data']['datasource config']))
+  
+  # Get the log file data, we just created (includes defaults)
   sql = "SELECT * FROM log_file WHERE id = %s" % new_id
   latest_log_file = Query(sql, LoadYaml(processing['spec_data']['datasource config']))[0]
   
@@ -227,9 +248,12 @@ def SaveMultiLine(multi_line_data, processing):
   #NOTE(g): MySQL will chop milliseconds from datetimes, which is why this is required
   occurred = ConvertDateToDecimal(multi_line_data['occurred'])
 
-  sql = "INSERT INTO log_multiline (component, occurred, subcomponent, service_id, `lines`, log_id, log_offset) VALUES (%s, %s, '%s', %s, '%s', %s, %s)" % (\
-        component_id, occurred, SanitizeSQL(multi_line_data['subcomponent']), service_id_value,
-        SanitizeSQL(multi_line_data['multiline']), processing['latest_log_file']['id'], multi_line_data['line_offset'])
+  sql = "INSERT INTO log_multiline (component, occurred, subcomponent, service_id, `lines`, log_id, log_offset) VALUES  " + \
+        "(%s, %s, '%s', %s, '%s', %s, %s)"
+  
+  sql = sql %(component_id, occurred, SanitizeSQL(multi_line_data['subcomponent']), service_id_value,
+              SanitizeSQL(multi_line_data['multiline']), processing['latest_log_file']['id'],
+              multi_line_data['line_offset'])
   exception_id = Query(sql, LoadYaml(processing['spec_data']['datasource config']))
   
   return exception_id
@@ -293,9 +317,10 @@ def SaveLine(line_data, processing):
   #NOTE(g): MySQL will chop milliseconds from datetimes, which is why this is required
   occurred = ConvertDateToDecimal(occurred)
   
-  sql = "INSERT INTO log_line (occurred, match_id, log_id, log_offset, component, subcomponent, data_json) VALUES (%s, %s, %s, %s, %s, '%s', '%s')" % \
-        (occurred, match_id, processing['latest_log_file']['id'], line_offset,
-         component, SanitizeSQL(subcomponent), SanitizeSQL(data_json))
+  sql = "INSERT INTO log_line (occurred, log_id, match_id, log_offset, component, subcomponent, data_json) VALUES " + \
+        "(%s, %s, %s, %s, %s, '%s', '%s')"
+  sql = sql % (occurred, processing['latest_log_file']['id'], match_id, line_offset, component, SanitizeSQL(subcomponent),
+               SanitizeSQL(data_json))
   new_log_id = Query(sql, LoadYaml(processing['spec_data']['datasource config']))
 
 

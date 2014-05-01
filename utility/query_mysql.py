@@ -2,11 +2,25 @@
 Query MySQL datasource
 """
 
-import mysql.connector
-
 from log import log
 
+# Importing MySQL may fail if it's not installed.  Since we may not need it, defer failing
+try:
+  import mysql.connector
 
+  class MySQLCursorDict(mysql.connector.cursor.MySQLCursor):
+      def _row_to_python(self, rowdata, desc=None):
+          row = super(MySQLCursorDict, self)._row_to_python(rowdata, desc)
+          if row:
+              return dict(zip(self.column_names, row))
+          return None
+
+except ImportError as e:
+  mysql = None
+  log('WARNING: MySQL connector not installed')
+
+
+# Connection and Cursor cache
 CONNECTIONS = {}
 CURSORS = {}
 
@@ -18,12 +32,6 @@ def MaxRetryFailure(Exception):
   """Failed to do the query requested."""
 
 
-class MySQLCursorDict(mysql.connector.cursor.MySQLCursor):
-    def _row_to_python(self, rowdata, desc=None):
-        row = super(MySQLCursorDict, self)._row_to_python(rowdata, desc)
-        if row:
-            return dict(zip(self.column_names, row))
-        return None
 
 
 def GetConectionAndCursor(datasource):
@@ -56,6 +64,10 @@ def CloseConnection(datasource):
 
 
 def Query(sql, datasource):
+  # Fail if no MySQL module
+  if mysql == None:
+    raise Exception('Attempting to query MySQL database, but mysql.connector is not installed')
+  
   attempt = 0
   
   failures = []

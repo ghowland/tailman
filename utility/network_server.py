@@ -46,6 +46,9 @@ class TailTCPServerHandler(SocketServer.BaseRequestHandler):
       # Process data (host, path, etc)
       processing = None
       
+      # Keep track of our total work
+      counter = 0
+      
       # Run forever
       while RUNNING:
         (wait_in, wait_out, wait_err) = select.select([fd], [fd], [], 0)
@@ -59,15 +62,33 @@ class TailTCPServerHandler(SocketServer.BaseRequestHandler):
         while '\n' in buffer:
           (line, buffer) = buffer.split('\n', 1)
           
+          #print line #DEBUG: Watch everything
+          counter += 1
+          if counter % 250 == 0:
+            print 'Counter: %s' % counter
+          
           processed_command = False
 
           # Received request to find out where we last had information about this log
-          file_header = re.findall('------QUERYHOST:(.*?):PATH:(.*?):------', line)
+          file_header = re.findall('------QUERYHOST:(.*?):PATH:(.*?):SIZE:(.*?):CHECKSUM:(.*?):------', line)
           if file_header:
             # Extract file data
-            query_request = {'host':file_header[0][0], 'path':file_header[0][1]}
+            print file_header
+            query_request = {'host':file_header[0][0], 'path':file_header[0][1], 'size':int(file_header[0][2]),
+                             'checksum':file_header[0][3]}
             log('Query data log: Host: %(host)s  Path: %(path)s' % query_request)
             processed_command = True
+            
+            #print line
+            
+            # Respond to query request with current information
+            GetProcessingSpecData(query_request, self.server)
+            #print 'Getting latest log file...'
+            latest_log_file = GetLatestLogFileInfo(query_request)
+            response = '------FILERESPONSE:PATH:%s:SIZE:%s:OFFSET:%s:------\n' % (query_request['path'], latest_log_file['size'],
+                                                                                  latest_log_file['remote_offset'])
+            log(response)
+            self.request.send(response)
             
             # Query our data source and find out when we last got logs from that system
             log('Server: %s' % self.server.server_data)
@@ -85,6 +106,7 @@ class TailTCPServerHandler(SocketServer.BaseRequestHandler):
             processing['storage_path_fp'].truncate()
             # Close the storage page
             processing['storage_path_fp'].close()
+            processing['storage_path_fp'] = None
           
           # Received new file relay header.  Telling us host/path and log file state
           file_header = re.findall('------HOST:(.*?):PATH:(.*?):MTIME:(.*?):OFFSET:(.*?):SIZE:(.*?):------', line)
@@ -95,32 +117,13 @@ class TailTCPServerHandler(SocketServer.BaseRequestHandler):
               pass
             
             # Extract file data
-            processing = {'host':file_header[0][0], 'path':file_header[0][1], 'mtime':file_header[0][2], 'offset':file_header[0][3],
-                          'size':file_header[0][4], 'offset_processed':0, 'data':{}}
+            processing = {'host':file_header[0][0], 'path':file_header[0][1], 'mtime':int(file_header[0][2]), 'offset':int(file_header[0][3]),
+                          'size':int(file_header[0][4]), 'offset_processed':int(file_header[0][3]), 'data':{}}
             processed_command = True
             previous_line_data = None
             
-            # Add in the spec file information to this processing data
-            for (spec_path, spec_data) in self.server.server_data['specs'].items():
-              path_regex = spec_data['input']['glob'].replace('*', '(.*?)')
-              path_regex_result = re.findall(path_regex, processing['path'])
-              if path_regex_result:
-                processing['spec_path'] = spec_path
-                processing['spec_data'] = spec_data
-                
-                # Get all the glob key data out of our path
-                for count in range(0, len(spec_data['input']['glob keys'])):
-                  glob_key = spec_data['input']['glob keys'][count]
-                  # If we arent getting tuple wrapped regex data (list with a tuple in it, with our actual data), extract directly
-                  if type(path_regex_result[0]) != tuple:
-                    processing['data'][glob_key] = path_regex_result[count]
-                  # Else, extract the glob key from inside the tuple in the list
-                  else:
-                    processing['data'][glob_key] = path_regex_result[0][count]
-                    
-                
-                # We found our spec, no need to look for more
-                break
+            # Using what we know, populate spec file information and default data (created 'data' key dict if missing)
+            GetProcessingSpecData(processing, self.server)
             
             # Store component ID in the data, we get that from our spec_data, so every line gets it
             processing['data']['component'] =  GetComponentId(processing)
@@ -156,7 +159,11 @@ class TailTCPServerHandler(SocketServer.BaseRequestHandler):
                 if not os.path.isdir(os.path.dirname(storage_path)):
                   os.makedirs(os.path.dirname(storage_path))
                 
-                processing['storage_path_fp'] = open(storage_path, 'r+')
+                # Open the file, and move to the current offset
+                if os.path.isfile(storage_path):
+                  processing['storage_path_fp'] = open(storage_path, 'r+')
+                else:
+                  processing['storage_path_fp'] = open(storage_path, 'w')
                 processing['storage_path_fp'].seek(int(processing['offset']), 0)
               
               
@@ -178,13 +185,44 @@ class TailTCPServerHandler(SocketServer.BaseRequestHandler):
                 #  log('Failed to save line keys, line: %s --- error: %s' % (line, e))
               
               # Write the line
-              processing['storage_path_fp'].write(line + '\n')
-              
-              # Update our state
-              processing['offset_processed'] += len(line) + 1
+              if processing['storage_path_fp'] != None:
+                processing['storage_path_fp'].write(line + '\n')
+                
+                # Update our state
+                processing['offset_processed'] += len(line) + 1
+                
+                # Update the log file
+                UpdateLogFileInfo(processing)
     
     #except Exception, e:
     #  print "Error processing connection: ", e
+
+
+def GetProcessingSpecData(processing, server):
+  """Using what we know, populate spec file information and default data (created 'data' key dict if missing)"""
+  if 'data' not in processing:
+    processing['data'] = {}
+  
+  # Add in the spec file information to this processing data
+  for (spec_path, spec_data) in server.server_data['specs'].items():
+    path_regex = spec_data['input']['glob'].replace('*', '(.*?)')
+    path_regex_result = re.findall(path_regex, processing['path'])
+    if path_regex_result:
+      processing['spec_path'] = spec_path
+      processing['spec_data'] = spec_data
+      
+      # Get all the glob key data out of our path
+      for count in range(0, len(spec_data['input']['glob keys'])):
+        glob_key = spec_data['input']['glob keys'][count]
+        # If we arent getting tuple wrapped regex data (list with a tuple in it, with our actual data), extract directly
+        if type(path_regex_result[0]) != tuple:
+          processing['data'][glob_key] = path_regex_result[count]
+        # Else, extract the glob key from inside the tuple in the list
+        else:
+          processing['data'][glob_key] = path_regex_result[0][count]
+      
+      # We found our spec, no need to look for more
+      break
 
 
 def ServerManager(specs, options):
