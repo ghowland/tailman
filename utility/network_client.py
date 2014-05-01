@@ -44,6 +44,14 @@ def ResetConnection(target_host, target_port):
   CLIENT_CONNECTIONS[key] = None
 
 
+def CloseAllConnections():
+  global CLIENT_CONNECTIONS
+  
+  for key in CLIENT_CONNECTIONS:
+    log('Closing connection: %s: %s' % (key, CLIENT_CONNECTIONS[key]))
+    CLIENT_CONNECTIONS[key].close()
+
+
 def ClientSend(path, path_mtime, path_offset, path_size, text, target_host, target_port, retry=0):
   log('ClientSend: %s: %s: %s: %s: %s: %s' % (path, path_mtime, path_offset, path_size, target_host, target_port))
   

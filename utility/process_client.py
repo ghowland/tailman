@@ -46,6 +46,9 @@ def TailLogsFromSpecs(options, spec_paths):
   # Process all our files
   for (file_path, file_data) in input_files.items():
     RelayFile(file_path, file_data)
+  
+  # Close all our connections
+  CloseAllConnections()
 
 
 def RelayFile(file_path, file_data):
@@ -58,7 +61,7 @@ def RelayFile(file_path, file_data):
   
   # Get the offset from the server, the last place we read from
   offset_data = ClientGetOffset(file_path, path_mtime, path_size, target_host, target_port)
-  log('Offset data: %s' % offset_data)
+  #log('Offset data: %s' % offset_data)
   
   #TODO(g): Use the queried data for this, not just starting at the beginning
   if offset_data['offset'] in (None, 'None'):

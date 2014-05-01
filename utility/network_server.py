@@ -49,13 +49,21 @@ class TailTCPServerHandler(SocketServer.BaseRequestHandler):
       # Keep track of our total work
       counter = 0
       
-      # Run forever
+      # Run forever, or until break
       while RUNNING:
         (wait_in, wait_out, wait_err) = select.select([fd], [fd], [], 0)
         
         # Handle HTTP request
         if fd in wait_in:
-          buffer += self.request.recv(1024)
+          # Get more data
+          buffer_chunk = self.request.recv(1024)
+          
+          # If we received the end, break out of our forever-while 
+          if not buffer_chunk:
+            break
+          
+          # Add it to our buffer
+          buffer += buffer_chunk
         
         
         # Process any complete lines
@@ -73,10 +81,10 @@ class TailTCPServerHandler(SocketServer.BaseRequestHandler):
           file_header = re.findall('------QUERYHOST:(.*?):PATH:(.*?):SIZE:(.*?):CHECKSUM:(.*?):------', line)
           if file_header:
             # Extract file data
-            print file_header
+            #print file_header
             query_request = {'host':file_header[0][0], 'path':file_header[0][1], 'size':int(file_header[0][2]),
                              'checksum':file_header[0][3]}
-            log('Query data log: Host: %(host)s  Path: %(path)s' % query_request)
+            #log('Query data log: Host: %(host)s  Path: %(path)s' % query_request)
             processed_command = True
             
             #print line
@@ -87,11 +95,11 @@ class TailTCPServerHandler(SocketServer.BaseRequestHandler):
             latest_log_file = GetLatestLogFileInfo(query_request)
             response = '------FILERESPONSE:PATH:%s:SIZE:%s:OFFSET:%s:------\n' % (query_request['path'], latest_log_file['size'],
                                                                                   latest_log_file['remote_offset'])
-            log(response)
+            #log(response)
             self.request.send(response)
             
             # Query our data source and find out when we last got logs from that system
-            log('Server: %s' % self.server.server_data)
+            #log('Server: %s' % self.server.server_data)
             pass
           
           # Received close-log relay header.  We're done with relaying/parsing this host/path at the moment.
@@ -100,7 +108,7 @@ class TailTCPServerHandler(SocketServer.BaseRequestHandler):
             finish_request = {'host':file_header[0][0], 'path':file_header[0][1]}
             processed_command = True
             log('Finished processing: %(host)s: %(path)s' % finish_request)
-            log('   Processing Data: %s' % processing)
+            #log('   Processing Data: %s' % processing)
             # Remove the last newline, we always add one too many
             processing['storage_path_fp'].seek(-1, os.SEEK_END)
             processing['storage_path_fp'].truncate()
@@ -196,6 +204,8 @@ class TailTCPServerHandler(SocketServer.BaseRequestHandler):
     
     #except Exception, e:
     #  print "Error processing connection: ", e
+    
+    log('Closing connection (fd=%s)' % fd)
 
 
 def GetProcessingSpecData(processing, server):

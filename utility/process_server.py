@@ -180,7 +180,7 @@ def GetLatestLogFileInfo(processing):
   # Get the latest log file from the DB
   sql = "SELECT * FROM log_file WHERE host = '%s' AND host_path = '%s' ORDER BY updated DESC LIMIT 1" % \
         (SanitizeSQL(processing['host']), SanitizeSQL(processing['path']))
-  print sql
+  #print sql
   latest_log_file = Query(sql, LoadYaml(processing['spec_data']['datasource config']))
 
   # If we did not receive a log file, create it
@@ -211,7 +211,7 @@ def CreateNewLogFile(processing):
   # Get the component ID
   component_id = GetComponentId(processing)
   
-  sql = "INSERT INTO log_file (host, host_path, created, component) VALUES ('%s', '%s', NOW(), %s)" % \
+  sql = "INSERT INTO log_file (host, host_path, created, updated, component) VALUES ('%s', '%s', NOW(), NOW(), %s)" % \
         (SanitizeSQL(processing['host']), SanitizeSQL(processing['path']), component_id)
   new_id = Query(sql, LoadYaml(processing['spec_data']['datasource config']))
   
