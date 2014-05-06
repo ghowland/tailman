@@ -48,8 +48,16 @@ def CloseAllConnections():
   global CLIENT_CONNECTIONS
   
   for key in CLIENT_CONNECTIONS:
-    log('Closing connection: %s: (fd=%s)' % (key, CLIENT_CONNECTIONS[key].fileno()))
-    CLIENT_CONNECTIONS[key].close()
+    try:
+      log('Closing connection: %s: (fd=%s)' % (key, CLIENT_CONNECTIONS[key].fileno()))
+      CLIENT_CONNECTIONS[key].close()
+    
+    except socket.error, e:
+      #log('Could not close socket: %s: %s' % (key, e))
+      pass
+    
+    finally:
+      CLIENT_CONNECTIONS[key] = None
 
 
 def ClientSend(path, path_mtime, path_offset, path_size, text, target_host, target_port, retry=0):

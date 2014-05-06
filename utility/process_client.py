@@ -7,6 +7,8 @@ import glob
 import re
 import stat
 import os
+import time
+import socket
 
 from log import log
 from path import *
@@ -14,8 +16,30 @@ from path import *
 from process_server import *
 from network_client import *
 
+# Seconds to delay between runs
+RUN_DELAY_SECONDS = 5
+
 
 def TailLogsFromSpecs(options, spec_paths):
+  """Wrapper for TailLogsFromSpecs_Once() to control if we keep running."""
+  RUNNING = True
+  
+  while RUNNING:
+    TailLogsFromSpecs_Once(options, spec_paths)
+    
+    # If we are only supposed to run once, quit
+    if options['run_once']:
+      log('Run once completed.  Quitting.')
+      break
+    else:
+      log('Run completed.  Sleeping: %s seconds' % RUN_DELAY_SECONDS)
+      time.sleep(RUN_DELAY_SECONDS)
+  
+  # Close all our connections
+  CloseAllConnections()
+
+
+def TailLogsFromSpecs_Once(options, spec_paths):
   """Begin to tail files based on their specs."""
   # Load the specs
   specs = {}
@@ -34,21 +58,29 @@ def TailLogsFromSpecs(options, spec_paths):
     files = glob.glob(spec_data['input']['glob'])
     
     for file_path in files:
-      # Open the file
-      fp = open(file_path)
-      
       #TODO(g): Seek to previously saved position
       position = 0
       
       # Store everything we know about this file, so we can work with it elsewhere
-      input_files[file_path] = {'fp':fp, 'position': position, 'spec_path':spec_path, 'spec_data':spec_data}
+      input_files[file_path] = {'fp':None, 'position': position, 'spec_path':spec_path, 'spec_data':spec_data}
+  
   
   # Process all our files
   for (file_path, file_data) in input_files.items():
-    RelayFile(file_path, file_data)
-  
-  # Close all our connections
-  CloseAllConnections()
+    # Relay
+    try:
+      # Open the file
+      fp = open(file_path)
+      file_data['fp'] = fp
+      
+      RelayFile(file_path, file_data)
+    
+    except socket.error, e:
+      log('Network Error: %s' % e)
+    
+    finally:
+      # Close the file so we stay clean on file handles
+      fp.close()
 
 
 def RelayFile(file_path, file_data):
