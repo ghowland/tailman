@@ -102,7 +102,8 @@ def RelayFile(file_path, file_data):
     #NOTE(g):remote_offset is always +1 from contents we have checked.  Doing the stat test means subtracting 1 (-1) from remote_offset
     #   to compare against local file, because a newline is always assumed at the end, and if the file is 0 bytes, the offset will
     #   be 1.
-    path_offset = int(offset_data['offset']) - 1
+    #path_offset = int(offset_data['offset']) - 1
+    path_offset = int(offset_data['offset'])
   
   # Set the position to start reading from, based on offset
   file_data['fp'].seek(path_offset, 0)

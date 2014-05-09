@@ -232,7 +232,8 @@ def CreateNewLogFile(processing):
   
   # If the directory doesnt exist, create it
   if not os.path.isdir(os.path.dirname(latest_log_file['path'])):
-    os.makedirs(os.path.dirname(latest_log_file['path']))
+    log('Creating directory: %s' % os.path.dirname(latest_log_file['path']))
+    os.makedirs(os.path.dirname(latest_log_file['path']), 0755)
   
   return latest_log_file
 

@@ -65,7 +65,6 @@ class TailTCPServerHandler(SocketServer.BaseRequestHandler):
           # Add it to our buffer
           buffer += buffer_chunk
         
-        
         # Process any complete lines
         while '\n' in buffer:
           (line, buffer) = buffer.split('\n', 1)
@@ -105,9 +104,9 @@ class TailTCPServerHandler(SocketServer.BaseRequestHandler):
           # Received close-log relay header.  We're done with relaying/parsing this host/path at the moment.
           file_header = re.findall('------FINISHED:HOST:(.*?):PATH:(.*?):------', line)
           if file_header:
-            finish_request = {'host':file_header[0][0], 'path':file_header[0][1]}
+            finish_request = {'host':file_header[0][0], 'path':file_header[0][1], 'offset':processing['offset_processed']}
             processed_command = True
-            log('Finished processing: %(host)s: %(path)s' % finish_request)
+            log('Finished processing: %(host)s: %(path)s: %(offset)s' % finish_request)
             #log('   Processing Data: %s' % processing)
             # Remove the last newline, we always add one too many
             processing['storage_path_fp'].seek(-1, os.SEEK_END)
@@ -198,6 +197,10 @@ class TailTCPServerHandler(SocketServer.BaseRequestHandler):
                 
                 # Update our state
                 processing['offset_processed'] += len(line) + 1
+                
+                # Bound the processed on the size
+                if processing['offset_processed'] > processing['size']:
+                  processing['offset_processed'] = processing['size']
                 
                 # Update the log file
                 UpdateLogFileInfo(processing)
