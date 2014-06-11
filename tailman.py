@@ -1,6 +1,9 @@
 #!/usr/bin/env python2
 """
 TailMan - Manage tailing multiple files, parsing and relaying raw and/or summary data to remote systems
+
+Copyright Geoff Howland, 2014.  MIT License.
+
 """
 
 
